@@ -3,6 +3,8 @@ const path = require('path');
 const fs = require('fs');
 const { exec, execSync } = require('child_process');
 const os = require('os');
+const https = require('https');
+const http = require('http');
 
 // Native robotjs for desktop automation (optional - requires build tools)
 let robot;
@@ -566,5 +568,124 @@ ipcMain.handle('list-processes', async () => {
     return { success: true, output, platform };
   } catch (e) {
     return { success: false, error: e.message };
+  }
+});
+
+// =============================================
+// IPC Handlers - Google Gemini API
+// =============================================
+
+// Helper: Make HTTP/HTTPS request
+function makeRequest(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const mod = urlObj.protocol === 'https:' ? https : http;
+    const req = mod.request(url, {
+      method: options.method || 'GET',
+      headers: options.headers || {},
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          resolve({ status: res.statusCode, data: JSON.parse(data), headers: res.headers });
+        } catch {
+          resolve({ status: res.statusCode, data: data, headers: res.headers });
+        }
+      });
+    });
+    req.on('error', reject);
+    if (options.body) req.write(options.body);
+    req.end();
+  });
+}
+
+// List available Gemini models from the API
+ipcMain.handle('list-gemini-models', async (event, apiKey) => {
+  try {
+    if (!apiKey) {
+      return { success: false, error: 'API Key não fornecida' };
+    }
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+    const response = await makeRequest(url);
+
+    if (response.status !== 200) {
+      const errorMsg = response.data?.error?.message || `Erro ${response.status}`;
+      return { success: false, error: errorMsg };
+    }
+
+    const models = (response.data?.models || [])
+      .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+      .map(m => ({
+        id: m.name.replace('models/', ''),
+        name: m.displayName || m.name,
+        description: m.description || '',
+        inputTokenLimit: m.inputTokenLimit,
+        outputTokenLimit: m.outputTokenLimit,
+      }))
+      .sort((a, b) => {
+        // Sort: prefer newer models first, flash before pro
+        const aName = a.id.toLowerCase();
+        const bName = b.id.toLowerCase();
+        // Prioritize models with "gemini" in the name
+        if (aName.includes('gemini') && !bName.includes('gemini')) return -1;
+        if (!aName.includes('gemini') && bName.includes('gemini')) return 1;
+        // Then by version (2.5 > 2.0 > 1.5)
+        return bName.localeCompare(aName);
+      });
+
+    return { success: true, models };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Test API Key connection
+ipcMain.handle('test-api-connection', async (event, apiKey, model) => {
+  try {
+    if (!apiKey) {
+      return { success: false, error: 'API Key não fornecida' };
+    }
+
+    const modelId = model || 'gemini-2.0-flash';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
+
+    const body = JSON.stringify({
+      contents: [{
+        parts: [{ text: 'Responda apenas: OK' }]
+      }],
+      generationConfig: {
+        maxOutputTokens: 10,
+      }
+    });
+
+    const response = await makeRequest(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+
+    if (response.status === 200) {
+      const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || 'Conexão OK';
+      return { success: true, message: `Conexão bem-sucedida! Modelo: ${modelId}` };
+    }
+
+    const errorMsg = response.data?.error?.message || `Erro ${response.status}`;
+    const errorStatus = response.data?.error?.status || '';
+    
+    if (errorStatus === 'INVALID_ARGUMENT' || response.status === 400) {
+      return { success: false, error: `Modelo "${modelId}" não disponível para esta API Key. Tente outro modelo.` };
+    }
+    if (response.status === 403 || errorStatus === 'PERMISSION_DENIED') {
+      return { success: false, error: 'API Key não tem permissão. Verifique se a API Generative Language está habilitada.' };
+    }
+    if (response.status === 401) {
+      return { success: false, error: 'API Key inválida ou expirada. Gere uma nova chave em aistudio.google.com' };
+    }
+
+    return { success: false, error: errorMsg };
+  } catch (e) {
+    return { success: false, error: `Erro de conexão: ${e.message}` };
   }
 });

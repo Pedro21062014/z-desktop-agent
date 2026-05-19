@@ -29,4 +29,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   windowAction: (action) => ipcRenderer.invoke('window-action', action),
   windowDragStart: (pos) => ipcRenderer.invoke('window-drag-start', pos),
   windowDragMove: (pos) => ipcRenderer.invoke('window-drag-move', pos),
+
+  // Gemini API
+  listGeminiModels: (apiKey) => ipcRenderer.invoke('list-gemini-models', apiKey),
+  testApiConnection: (apiKey, model) => ipcRenderer.invoke('test-api-connection', apiKey, model),
 });
