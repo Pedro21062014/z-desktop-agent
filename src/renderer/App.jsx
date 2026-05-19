@@ -134,6 +134,8 @@ export default function App() {
         parts: [{ text: m.content }]
       }));
 
+      // Chat is now handled entirely by the main process via IPC
+      // Desktop automation functions are executed during the chat loop in main process
       const response = await geminiClient.chat(history);
       
       const assistantMessage = { 
@@ -146,13 +148,6 @@ export default function App() {
       const updatedMessages = [...newMessages, assistantMessage];
       setMessages(updatedMessages);
       saveCurrentConversation(updatedMessages, convId);
-
-      // Execute any actions from the AI
-      if (response.actions && response.actions.length > 0) {
-        for (const action of response.actions) {
-          await executeAction(action);
-        }
-      }
     } catch (e) {
       const errorMessage = {
         role: 'assistant',
@@ -165,50 +160,6 @@ export default function App() {
       saveCurrentConversation(updatedMessages, convId);
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const executeAction = async (action) => {
-    try {
-      let result;
-      switch (action.type) {
-        case 'execute_command':
-          result = await window.electronAPI.executeCommand(action.command, action.timeout || 30000);
-          break;
-        case 'screenshot':
-          result = await window.electronAPI.takeScreenshot();
-          break;
-        case 'mouse_click':
-          result = await window.electronAPI.mouseClick(action.x, action.y, action.button || 'left', action.doubleClick || false);
-          break;
-        case 'mouse_move':
-          result = await window.electronAPI.mouseMove(action.x, action.y);
-          break;
-        case 'type_text':
-          result = await window.electronAPI.typeText(action.text);
-          break;
-        case 'press_key':
-          result = await window.electronAPI.pressKey(action.key, action.modifiers || []);
-          break;
-        case 'open_app':
-          result = await window.electronAPI.openApp(action.name);
-          break;
-        case 'open_url':
-          result = await window.electronAPI.openUrl(action.url);
-          break;
-        case 'scroll':
-          result = await window.electronAPI.mouseScroll(action.amount || 3, action.direction || 'down');
-          break;
-        case 'list_processes':
-          result = await window.electronAPI.listProcesses();
-          break;
-        default:
-          result = { success: false, error: `Unknown action type: ${action.type}` };
-      }
-      return result;
-    } catch (e) {
-      console.error('Error executing action:', e);
-      return { success: false, error: e.message };
     }
   };
 

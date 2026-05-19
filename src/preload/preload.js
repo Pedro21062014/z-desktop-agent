@@ -33,4 +33,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Gemini API
   listGeminiModels: (apiKey) => ipcRenderer.invoke('list-gemini-models', apiKey),
   testApiConnection: (apiKey, model) => ipcRenderer.invoke('test-api-connection', apiKey, model),
+  chatGemini: (apiKey, model, history) => ipcRenderer.invoke('chat-gemini', { apiKey, model, history }),
 });

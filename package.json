@@ -1,6 +1,6 @@
 {
   "name": "z-desktop-agent",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI Desktop Agent - Controle seu computador com IA",
   "main": "src/main/main.js",
   "homepage": "https://github.com/Pedro21062014/z-desktop-agent",
@@ -46,10 +46,6 @@
     "win": {
       "target": [
         {
-          "target": "nsis",
-          "arch": ["x64"]
-        },
-        {
           "target": "portable",
           "arch": ["x64"]
         }
@@ -57,16 +53,11 @@
       "icon": "assets/icon.png",
       "sign": false,
       "signAndEditExecutable": false,
+      "signDlls": false,
+      "signingHashAlgorithms": [],
       "verifyUpdateCodeSignature": false,
+      "forceCodeSigning": false,
       "requestedExecutionLevel": "asInvoker"
-    },
-    "nsis": {
-      "oneClick": true,
-      "allowToChangeInstallationDirectory": false,
-      "artifactName": "Z-Desktop-Agent-Setup-${version}.${ext}"
-    },
-    "portable": {
-      "artifactName": "Z-Desktop-Agent-Portable-${version}.${ext}"
     },
     "extraResources": []
   },
