@@ -117,15 +117,20 @@ async function fallbackMouseClick(x, y, button = 'left', doubleClick = false) {
     });
   } else if (platform === 'win32') {
     return new Promise((resolve) => {
+      // Use PowerShell with user32.dll mouse_event for real clicks
+      const clickDown = button === 'right' ? 8 : 2; // MOUSEEVENTF_RIGHTDOWN=8, MOUSEEVENTF_LEFTDOWN=2
+      const clickUp = button === 'right' ? 16 : 4;  // MOUSEEVENTF_RIGHTUP=16, MOUSEEVENTF_LEFTUP=4
       const ps = `
         Add-Type -AssemblyName System.Windows.Forms
         [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${Math.round(x)},${Math.round(y)})
+        Start-Sleep -Milliseconds 100
+        Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class Mouse{[DllImport("user32.dll")]public static extern void mouse_event(int dwFlags,int dx,int dy,int dwData,IntPtr dwExtraInfo);}'
+        [Mouse]::mouse_event(${clickDown},0,0,0,[IntPtr]::Zero)
         Start-Sleep -Milliseconds 50
-        ${button === 'right' ? 
-          '$ws = New-Object System.Windows.Forms.SendKeys; [System.Windows.Forms.SendKeys]::SendWait("{RIGHTCLICK}")' : 
-          `[System.Windows.Forms.SendKeys]::SendWait(${doubleClick ? '"{ENTER 2}"' : '"{ENTER}"'})`}
-      `;
-      exec(`powershell -command "${ps.replace(/\n/g, ' ')}"`, (error) => {
+        [Mouse]::mouse_event(${clickUp},0,0,0,[IntPtr]::Zero)
+        ${doubleClick ? 'Start-Sleep -Milliseconds 100\n[Mouse]::mouse_event(' + clickDown + ',0,0,0,[IntPtr]::Zero)\nStart-Sleep -Milliseconds 50\n[Mouse]::mouse_event(' + clickUp + ',0,0,0,[IntPtr]::Zero)' : ''}
+      `.replace(/\n/g, ' ');
+      exec(`powershell -command "${ps}"`, (error) => {
         resolve({ success: !error, error: error ? error.message : null });
       });
     });
@@ -821,7 +826,7 @@ const SYSTEM_INSTRUCTION = `Você é o Z Desktop Agent, um assistente de IA que 
 
 CAPACIDADES:
 - Executar comandos no terminal
-- Capturar screenshots da tela
+- Capturar screenshots da tela e ANALISAR as imagens
 - Clicar, mover o mouse e digitar texto
 - Pressionar teclas e atalhos de teclado
 - Abrir aplicativos e URLs
@@ -829,13 +834,29 @@ CAPACIDADES:
 - Verificar processos em execução
 - Obter resolução da tela e posição do mouse
 
+FLUXO DE TRABALHO PARA AUTOMAÇÃO VISUAL:
+1. SEMPRE tire um screenshot PRIMEIRO usando take_screenshot
+2. ANALISE a imagem do screenshot que será enviada para você
+3. Identifique na imagem os elementos que deseja interagir (botões, ícones, menus, campos de texto)
+4. Estime as coordenadas (x, y) aproximadas do elemento na imagem - lembre que (0,0) é o canto superior esquerdo
+5. Use mouse_click para clicar nas coordenadas identificadas
+6. Se precisar digitar, use type_text após clicar no campo
+7. Se a ação falhar ou o resultado não for esperado, tire outro screenshot e tente novamente
+
+DICAS PARA COORDENADAS:
+- A coordenada X vai da esquerda (0) para a direita (largura da tela)
+- A coordenada Y vai do topo (0) para baixo (altura da tela)
+- Use get_screen_size para saber a resolução da tela
+- Elementos no centro da tela geralmente estão em (largura/2, altura/2)
+- Barra de tarefas geralmente fica na parte inferior (Y próximo da altura total)
+
 DIRETRIZES:
 1. Sempre tire um screenshot ANTES de clicar em algo, para saber onde está clicando.
 2. Ao executar comandos, prefira comandos seguros. Sempre avise o usuário antes de comandos destrutivos (rm, del, format, etc.).
 3. Seja cuidadoso com ações irreversíveis. Peça confirmação quando necessário.
 4. Explique o que está fazendo a cada passo.
 5. Use português brasileiro para se comunicar com o usuário.
-6. Se uma ação falhar, tente entender o motivo e sugira alternativas.
+6. Se uma ação falhar, tire outro screenshot e tente uma abordagem diferente.
 7. Para clicar em elementos específicos, primeiro capture a tela, identifique as coordenadas aproximadas e depois clique.
 8. Responda de forma clara e útil, usando markdown para formatação quando apropriado.
 
@@ -1055,7 +1076,8 @@ async function takeScreenshotHelper() {
 function getSuccessResponse(name, result) {
   switch (name) {
     case 'take_screenshot':
-      return { captured: true, description: result.description || 'Screenshot captured' };
+      // Don't include the base64 in the function response text - it's sent as inline image separately
+      return { captured: true, description: result.description || 'Screenshot captured', width: result.width || 0, height: result.height || 0 };
     case 'execute_command':
       return { exitCode: result.exitCode, stdout: result.stdout?.substring(0, 2000), stderr: result.stderr?.substring(0, 500) };
     case 'get_screen_size':
@@ -1067,6 +1089,13 @@ function getSuccessResponse(name, result) {
     default:
       return { success: true };
   }
+}
+
+// Compress/resize screenshot to reduce token usage
+function compressScreenshotForAPI(base64Data, maxWidth = 1280) {
+  // For now, return as-is. The Gemini API can handle full-size images.
+  // In the future, we could use sharp or canvas to resize.
+  return base64Data;
 }
 
 // Chat with Gemini - all API calls done in main process (no CORS issues)
@@ -1099,7 +1128,7 @@ ipcMain.handle('chat-gemini', async (event, { apiKey, model, history }) => {
       },
     };
 
-    const maxRounds = 10;
+    const maxRounds = 15;
     let round = 0;
     let allActions = [];
 
@@ -1116,7 +1145,6 @@ ipcMain.handle('chat-gemini', async (event, { apiKey, model, history }) => {
         const errorMsg = response.data?.error?.message || `API Error: ${response.status}`;
         const errorStatus = response.data?.error?.status || '';
 
-        // Provide user-friendly error messages
         if (response.status === 400 || errorStatus === 'INVALID_ARGUMENT') {
           return { success: false, error: `Modelo "${model}" não suportado ou parâmetros inválidos. Tente outro modelo. Detalhes: ${errorMsg}` };
         }
@@ -1144,7 +1172,6 @@ ipcMain.handle('chat-gemini', async (event, { apiKey, model, history }) => {
         return { success: false, error: 'Sem resposta da API. Tente novamente.' };
       }
 
-      // Check for finish reason
       const finishReason = candidate.finishReason;
       if (finishReason === 'SAFETY') {
         return { success: false, error: 'Resposta bloqueada por filtros de segurança. Reformule sua mensagem.' };
@@ -1157,7 +1184,6 @@ ipcMain.handle('chat-gemini', async (event, { apiKey, model, history }) => {
       const textParts = parts.filter((p) => p.text);
 
       if (functionCalls.length === 0) {
-        // No more function calls - return the text response
         return {
           success: true,
           text: textParts.map((p) => p.text).join(''),
@@ -1167,10 +1193,21 @@ ipcMain.handle('chat-gemini', async (event, { apiKey, model, history }) => {
 
       // Process function calls
       const functionResponses = [];
+      let hasScreenshot = false;
+      let screenshotBase64 = null;
+      let screenshotMimeType = null;
+
       for (const fc of functionCalls) {
         const { name, args } = fc.functionCall;
         const actionResult = await executeDesktopFunction(name, args || {});
         allActions.push(actionResult);
+
+        // Check if this is a screenshot - we need to send the image back to the AI
+        if (name === 'take_screenshot' && actionResult.success && actionResult.base64) {
+          hasScreenshot = true;
+          screenshotBase64 = actionResult.base64;
+          screenshotMimeType = actionResult.mimeType || 'image/png';
+        }
 
         functionResponses.push({
           functionResponse: {
@@ -1196,6 +1233,25 @@ ipcMain.handle('chat-gemini', async (event, { apiKey, model, history }) => {
         role: 'function',
         parts: functionResponses,
       });
+
+      // CRITICAL: If we captured a screenshot, send it back as an inline image
+      // so the AI can actually SEE the screen and determine where to click
+      if (hasScreenshot && screenshotBase64) {
+        body.contents.push({
+          role: 'user',
+          parts: [
+            {
+              text: 'Aqui está o screenshot da tela atual. Analise esta imagem cuidadosamente para identificar elementos, textos, botões, ícones e suas coordenadas aproximadas na tela. Use esta informação para decidir onde clicar, o que digitar ou qual ação tomar a seguir.'
+            },
+            {
+              inline_data: {
+                mime_type: screenshotMimeType,
+                data: screenshotBase64,
+              },
+            },
+          ],
+        });
+      }
     }
 
     return {

@@ -27,7 +27,7 @@ export default function TitleBar({ onToggleSidebar }) {
         </span>
       </div>
       <div className="text-zinc-600 text-xs">
-        v1.0.1
+        v1.0.2
       </div>
     </div>
   );
